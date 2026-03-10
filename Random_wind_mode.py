@@ -6,57 +6,71 @@ from mpl_toolkits.mplot3d import Axes3D
 # USER SETTINGS
 # ==============================
 
-launch_angle_deg = 84
-launch_azimuth_deg = 133
+launch_angle_deg = 84        # launch elevation [deg]
+launch_azimuth_deg = 133     # launch direction [deg]
 
-wind_speed_kmh = 20     # mean wind speed
-wind_direction_deg = 60  # wind direction (from north)
-wind_turbulence = 2.0   # random gust strength (m/s)
+wind_speed_kmh = 20          # mean wind speed [km/h]
+wind_direction_deg = 100      # wind direction [deg]
+wind_turbulence = 2.0        # gust strength [m/s]
 
-parachute_drogue_alt = 120
-parachute_main_alt = 50
+parachute_drogue_alt = 0   # drogue deploy altitude [m]
+parachute_main_alt = 0    # main deploy altitude [m]
+
+# Control gains (PD controller)
+Kp_pitch = 0  # 8
+Kd_pitch = 0  # 2
+Kp_roll = 0  # 8
+Kd_roll = 0  # 2
+Kd_yaw = 0  # 1
 
 # ==============================
 # ROCKET PARAMETERS
 # ==============================
 
-mass0 = 6.0
-prop_mass = 2.0
-burn_time = 4.0
-thrust_force = 250
+mass0 = 6.0          # initial mass [kg]
+prop_mass = 2.0      # propellant mass [kg]
+burn_time = 8.0      # burn time [s]
+thrust_force = 400   # thrust [N]
 
-Cd_body = 0.5
-A_body = 0.012
+Cd_body = 0.5        # drag coefficient rocket body [-]
+A_body = 0.012       # reference area [m²]
 
-Cd_drogue = 2.0
-A_drogue = 0.3
+Cd_drogue = 2.0      # drogue parachute drag coefficient [-]
+A_drogue = 0.3       # drogue area [m²]
 
-Cd_main = 6.0
-A_main = 0.8
+Cd_main = 6.0        # main parachute drag coefficient [-]
+A_main = 0.8         # main parachute area [m²]
 
-Ix = 0.04
-Iy = 0.04
-Iz = 0.01
+Ix = 0.04            # moment of inertia X [kg·m²]
+Iy = 0.04            # moment of inertia Y [kg·m²]
+Iz = 0.01            # moment of inertia Z [kg·m²]
 
 # ==============================
 # SIMULATION PARAMETERS
 # ==============================
 
-dt = 0.01
-t_max = 60
+dt = 0.01            # simulation timestep [s]
+t_max = 500          # maximum simulation time [s]
+
+g = 9.81             # gravity [m/s²]
 
 # ==============================
 # INITIAL STATE
 # ==============================
 
-pos = np.array([0.0, 0.0, 0.0])
-vel = np.array([0.0, 0.0, 0.0])
+pos = np.array([0.0, 0.0, 0.0])    # position [m]
+vel = np.array([0.0, 0.0, 0.0])    # velocity [m/s]
 
-angles = np.array([0.0, np.radians(launch_angle_deg) -
-                  np.pi/2, np.radians(launch_azimuth_deg)])
-rates = np.array([0.0, 0.0, 0.0])
+angles = np.array([
+    0.0,
+    np.radians(launch_angle_deg) - np.pi/2,
+    np.radians(launch_azimuth_deg)
+])                                # Euler angles [rad]
 
-mass = mass0
+rates = np.array([0.0, 0.0, 0.0])   # angular rates [rad/s]
+
+mass = mass0                      # rocket mass [kg]
+
 drogue_deployed = False
 main_deployed = False
 
@@ -67,8 +81,12 @@ main_deployed = False
 x_log = []
 y_log = []
 z_log = []
+
 time_log = []
 angle_log = []
+
+speed_log = []
+acc_log = []
 
 # ==============================
 # HELPER FUNCTIONS
@@ -76,15 +94,25 @@ angle_log = []
 
 
 def rotation_matrix(phi, theta, psi):
-    Rz = np.array([[np.cos(psi), -np.sin(psi), 0],
-                   [np.sin(psi), np.cos(psi), 0],
-                   [0, 0, 1]])
-    Ry = np.array([[np.cos(theta), 0, np.sin(theta)],
-                   [0, 1, 0],
-                   [-np.sin(theta), 0, np.cos(theta)]])
-    Rx = np.array([[1, 0, 0],
-                   [0, np.cos(phi), -np.sin(phi)],
-                   [0, np.sin(phi), np.cos(phi)]])
+
+    Rz = np.array([
+        [np.cos(psi), -np.sin(psi), 0],
+        [np.sin(psi), np.cos(psi), 0],
+        [0, 0, 1]
+    ])
+
+    Ry = np.array([
+        [np.cos(theta), 0, np.sin(theta)],
+        [0, 1, 0],
+        [-np.sin(theta), 0, np.cos(theta)]
+    ])
+
+    Rx = np.array([
+        [1, 0, 0],
+        [0, np.cos(phi), -np.sin(phi)],
+        [0, np.sin(phi), np.cos(phi)]
+    ])
+
     return Rz @ Ry @ Rx
 
 
@@ -93,45 +121,54 @@ def thrust(t):
 
 
 def air_density(alt):
-    return 1.225*np.exp(-alt/8500)
+    return 1.225 * np.exp(-alt/8500)   # [kg/m³]
 
 
 def wind_model(alt):
-    # mean wind vector
-    wind_speed = wind_speed_kmh / 3.6
+
+    wind_speed = wind_speed_kmh / 3.6  # convert km/h → m/s
     wind_dir = np.radians(wind_direction_deg)
-    base = np.array([wind_speed*np.cos(wind_dir),
-                    wind_speed*np.sin(wind_dir), 0])
-    shear = np.array([0.001*alt, 0.0005*alt, 0])
+
+    base = np.array([
+        wind_speed*np.cos(wind_dir),
+        wind_speed*np.sin(wind_dir),
+        0
+    ])
+
+    shear = np.array([
+        0.001*alt,
+        0.0005*alt,
+        0
+    ])
+
     gust = np.random.normal(0, wind_turbulence, 3)
+
     return base + shear + gust
+
 
 # ==============================
 # SIMULATION LOOP
 # ==============================
 
-
 for step in range(int(t_max/dt)):
-    t = step*dt
+
+    t = step * dt
     alt = pos[2]
 
     if alt < 0 and t > 0.5:
         break
 
-    # mass
     if t < burn_time:
         mass = mass0 - prop_mass*(t/burn_time)
 
-    # thrust
     T = thrust(t)
 
-    # parachutes
     if not drogue_deployed and alt < parachute_drogue_alt and vel[2] < 0:
         drogue_deployed = True
+
     if drogue_deployed and not main_deployed and alt < parachute_main_alt:
         main_deployed = True
 
-    # choose drag
     if main_deployed:
         Cd = Cd_main
         A = A_main
@@ -142,87 +179,99 @@ for step in range(int(t_max/dt)):
         Cd = Cd_body
         A = A_body
 
-    # wind
     wind = wind_model(alt)
+
     rel_vel = vel - wind
     V = np.linalg.norm(rel_vel)
-    drag = -0.5*air_density(alt)*V**2*Cd*A * \
-        (rel_vel/V) if V > 0 else np.zeros(3)
+
+    if V > 0:
+        drag = -0.5 * air_density(alt) * V**2 * Cd * A * rel_vel / V   # [N]
+    else:
+        drag = np.zeros(3)
 
     thrust_body = np.array([0, 0, T])
     R = rotation_matrix(*angles)
     thrust_world = R @ thrust_body
-    gravity = np.array([0, 0, -mass*9.81])
-
+    gravity = np.array([0, 0, -mass*g])
     F = thrust_world + drag + gravity
-    acc = F/mass
+    acc = F / mass
 
-    vel += acc*dt
-    pos += vel*dt
+    vel += acc * dt
+    pos += vel * dt
 
-    # attitude stabilization
+    speed = np.linalg.norm(vel)
+    acc_mag = np.linalg.norm(acc)
+
     phi, theta, psi = angles
     p, q, r = rates
-    Mx = -8*phi - 2*p
-    My = -8*theta - 2*q
-    Mz = -0.3*r
-    rates += np.array([Mx/Ix, My/Iy, Mz/Iz])*dt
-    angles += rates*dt
 
-    # logging
+    # ==============================
+    # PD attitude control using USER SETTINGS
+    Mx = -Kp_roll*phi - Kd_roll*p
+    My = -Kp_pitch*theta - Kd_pitch*q
+    Mz = -Kd_yaw*r
+
+    rates += np.array([Mx/Ix, My/Iy, Mz/Iz]) * dt
+    angles += rates * dt
+    # ==============================
+
     time_log.append(t)
     x_log.append(pos[0])
     y_log.append(pos[1])
     z_log.append(pos[2])
     angle_log.append(theta)
+    speed_log.append(speed)
+    acc_log.append(acc_mag)
 
 # ==============================
 # PLOTS
 # ==============================
 
-# Altitude
-plt.figure()
-plt.plot(time_log, z_log)
-plt.xlabel("Time (s)")
-plt.ylabel("Altitude (m)")
-plt.title("Rocket Altitude")
-plt.grid()
+speed_scale = 5
+acc_scale = 20
 
-# Side view
 plt.figure()
-plt.plot(x_log, z_log)
-plt.xlabel("X Distance (m)")
-plt.ylabel("Altitude (m)")
-plt.title("Side Flight Path")
-plt.grid()
-
-# Top-down ground track
-plt.figure()
-plt.plot(x_log, y_log, label="Flight Path")
-plt.scatter(0, 0, color='red', label="Launch")
-plt.scatter(x_log[-1], y_log[-1], color='green', label="Landing")
-plt.xlabel("X (m)")
-plt.ylabel("Y (m)")
-plt.title("Top-Down Ground Track")
+plt.plot(time_log, z_log, label="Height [m]")
+plt.plot(time_log, np.array(speed_log)*speed_scale, label="Speed x5")
+plt.plot(time_log, np.array(acc_log)*acc_scale, label="Acceleration x20")
+plt.xlabel("Time [s]")
+plt.ylabel("Scaled values")
+plt.title("Rocket Height, Speed and Acceleration vs Time")
 plt.legend()
 plt.grid()
 
-# 3D trajectory
+plt.figure()
+plt.plot(x_log, z_log)
+plt.xlabel("Downrange Distance X [m]")
+plt.ylabel("Altitude [m]")
+plt.title("Side Flight Path")
+plt.grid()
+
+plt.figure()
+plt.plot(x_log, y_log)
+plt.scatter(0, 0)
+plt.scatter(x_log[-1], y_log[-1])
+plt.xlabel("X Position [m]")
+plt.ylabel("Y Position [m]")
+plt.title("Top-Down Ground Track")
+plt.grid()
+
 fig = plt.figure()
 ax = fig.add_subplot(111, projection='3d')
-ax.plot(x_log, y_log, z_log, label="Rocket Path")
-ax.set_xlabel("X (m)")
-ax.set_ylabel("Y (m)")
-ax.set_zlabel("Altitude (m)")
-ax.set_title("3D Trajectory")
-ax.legend()
-
+ax.plot(x_log, y_log, z_log)
+ax.set_xlabel("X Position [m]")
+ax.set_ylabel("Y Position [m]")
+ax.set_zlabel("Altitude [m]")
+ax.set_title("3D Rocket Trajectory")
 plt.show()
 
 # ==============================
-# REPORT
-# ==============================
+# FLIGHT REPORT
 
-print("Max altitude:", max(z_log), "m")
+print("\nFlight Report")
+print("-------------------------")
+print("Maximum altitude:", round(max(z_log), 2), "m")
 landing_distance = np.sqrt(x_log[-1]**2 + y_log[-1]**2)
-print("Landing distance:", landing_distance, "m")
+print("Landing distance:", round(landing_distance, 2), "m")
+flight_time = time_log[-1]
+print("Total flight time:", round(flight_time, 2), "s")
